@@ -1,0 +1,13 @@
+[package]
+name = "bakome-nexus"
+version = "2.0.0"
+edition = "2021"
+description = "BAKOME-NEXUS v2.0 OLYMPUS — Universal Vault Infrastructure for Institutions"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
+rand = "0.8"
+tokio = { version = "1", features = ["full"] }
