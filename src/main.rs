@@ -2,10 +2,10 @@
 // BAKOME-NEXUS v2.0 « OLYMPUS »
 // Universal Non-Custodial Vault Infrastructure for Institutions
 // 12+ Chains | ZK-Proofs | FHE | TEE | MoE 1024 | Bridges | Compliance
-// Pure Rust | 3000+ Lines | MIT Open Source | Zero Errors | Zero Warnings
+// Pure Rust | 3000+ Lines | MIT Open Source
 // ============================================================================
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Serialize, Deserialize};
 use sha2::{Sha256, Digest};
@@ -23,7 +23,9 @@ const SUPPORTED_CHAINS: &[&str] = &[
     "zksync", "starknet"
 ];
 const MIXTURE_OF_EXPERTS: usize = 1024;
+const MAX_VAULT_CAPACITY: u64 = 10_000_000_000;
 const MIN_COLLATERAL_RATIO: f64 = 1.5;
+const YIELD_SCAN_INTERVAL: u64 = 300;
 const FHE_KEY_SIZE: usize = 2048;
 
 // ============================================================
@@ -163,8 +165,8 @@ fn now() -> u64 {
 }
 
 fn generate_id() -> String {
-    let mut rng = rand::thread_rng();
-    let bytes: Vec<u8> = (0..16).map(|_| rng.gen()).collect();
+    let mut rng = rand::rng();
+    let bytes: Vec<u8> = (0..16).map(|_| rng.random()).collect();
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
@@ -375,22 +377,23 @@ impl FHEEngine {
     }
 
     pub fn generate_keypair(&mut self, vault_id: &str) -> (Vec<u8>, Vec<u8>) {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut secret_key = vec![0u8; FHE_KEY_SIZE / 8];
         let mut public_key = vec![0u8; FHE_KEY_SIZE / 8];
         for i in 0..FHE_KEY_SIZE / 8 {
-            secret_key[i] = rng.gen();
+            secret_key[i] = rng.random();
             public_key[i] = secret_key[i].wrapping_add(1);
         }
-      self.key_registry.insert(vault_id.to_string(), secret_key.clone());        (secret_key, public_key)
+        self.key_registry.insert(vault_id.to_string(), secret_key);
+        (secret_key, public_key)
     }
 
     pub fn encrypt_vault(&mut self, vault: &Vault) -> FHEEncryptedData {
         let (_, public_key) = self.generate_keypair(&vault.id);
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut ciphertext = vec![0u8; 512];
         for b in &mut ciphertext {
-            *b = rng.gen();
+            *b = rng.random();
         }
 
         let encrypted = FHEEncryptedData {
@@ -475,10 +478,10 @@ impl TEEEngine {
             return Err(format!("Platform '{}' not supported", platform));
         }
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut attestation = vec![0u8; 128];
         for b in &mut attestation {
-            *b = rng.gen();
+            *b = rng.random();
         }
 
         let enclave_id = format!("tee_{}", generate_id());
@@ -527,9 +530,9 @@ pub struct NEXUSOracle {
 
 impl NEXUSOracle {
     pub fn new() -> Self {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let moe_weights: Vec<f64> = (0..MIXTURE_OF_EXPERTS)
-            .map(|_| rng.gen::<f64>())
+            .map(|_| rng.random::<f64>())
             .collect();
 
         let specializations = vec![
@@ -562,7 +565,7 @@ impl NEXUSOracle {
 
     pub fn scan_all_chains(&mut self) -> Vec<YieldOpportunity> {
         let mut opportunities = Vec::new();
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         let protocols_by_chain: HashMap<&str, Vec<&str>> = [
             ("ethereum", vec!["Aave", "Compound", "Yearn", "Lido", "EigenLayer", "Morpho", "Spark", "Gearbox", "MakerDAO", "Frax"]),
@@ -581,11 +584,11 @@ impl NEXUSOracle {
 
         for (&chain, protocols) in &protocols_by_chain {
             for &protocol in protocols {
-                let apy = 2.0 + rng.gen::<f64>() * 50.0;
-                let risk = rng.gen::<f64>();
-                let liquidity = 1_000_000.0 + rng.gen::<f64>() * 500_000_000.0;
-                let tvl = liquidity * (0.3 + rng.gen::<f64>());
-                let expert_score = rng.gen::<f64>();
+                let apy = 2.0 + rng.random::<f64>() * 50.0;
+                let risk = rng.random::<f64>();
+                let liquidity = 1_000_000.0 + rng.random::<f64>() * 500_000_000.0;
+                let tvl = liquidity * (0.3 + rng.random::<f64>());
+                let expert_score = rng.random::<f64>();
 
                 opportunities.push(YieldOpportunity {
                     chain: chain.to_string(),
@@ -798,10 +801,11 @@ impl AuditNEXUS {
     }
 
     pub fn audit_vault(&mut self, vault: &Vault) -> ComplianceReport {
-        let mut score: f64 = 100.0;
+        let mut score = 100.0;
         let mut issues = Vec::new();
         let mut recommendations = Vec::new();
 
+        // Security check
         match vault.security_level {
             SecurityLevel::Standard => {
                 score -= 25.0;
@@ -818,6 +822,7 @@ impl AuditNEXUS {
             }
         }
 
+        // Collateral check
         if vault.collateral_ratio < MIN_COLLATERAL_RATIO {
             score -= 15.0;
             issues.push(format!(
@@ -828,12 +833,14 @@ impl AuditNEXUS {
             recommendations.push("Increase collateral to minimum 150%".to_string());
         }
 
+        // Chain support check
         if !SUPPORTED_CHAINS.contains(&vault.chain.as_str()) {
             score -= 50.0;
             issues.push(format!("Unsupported chain: {}", vault.chain));
             recommendations.push("Migrate to a supported chain".to_string());
         }
 
+        // Assets check
         if vault.assets.is_empty() {
             score -= 20.0;
             issues.push("Empty vault: no assets deposited".to_string());
@@ -843,7 +850,7 @@ impl AuditNEXUS {
         let report = ComplianceReport {
             vault_id: vault.id.clone(),
             framework: "MiCA/SEC/FATF".to_string(),
-            score: score.max(0.0_f64),
+            score: score.max(0.0),
             issues,
             recommendations,
             timestamp: now(),
@@ -936,11 +943,12 @@ impl NEXUSApp {
 
     pub async fn demo(&self) -> String {
         let mut result = String::new();
-        result.push_str("╔══════════════════════════════════════════╗\n");
+        result.push_str(&format!("╔══════════════════════════════════════════╗\n"));
         result.push_str(&format!("║   {}   ║\n", VERSION));
-        result.push_str("║   Universal Vault Infrastructure        ║\n");
-        result.push_str("╚══════════════════════════════════════════╝\n\n");
+        result.push_str(&format!("║   Universal Vault Infrastructure        ║\n"));
+        result.push_str(&format!("╚══════════════════════════════════════════╝\n\n"));
 
+        // Create vault
         let mut vault_engine = self.vault_engine.lock().await;
         let mut assets = HashMap::new();
         assets.insert("USDC".to_string(), 1_000_000.0);
@@ -953,14 +961,17 @@ impl NEXUSApp {
                 result.push_str(&format!("   Chain: {}\n", vault.chain));
                 result.push_str(&format!("   Security: {:?}\n\n", vault.security_level));
 
+                // ZK Proof
                 let mut zk = self.zk_engine.lock().await;
                 let proof = zk.generate_solvency_proof(&vault);
                 result.push_str(&format!("🔐 ZK-Proof generated: {}...\n\n", &proof.proof_hash[..16]));
 
+                // FHE Encryption
                 let mut fhe = self.fhe_engine.lock().await;
                 let encrypted = fhe.encrypt_vault(&vault);
                 result.push_str(&format!("🧮 FHE Encrypted vault: {} bytes\n\n", encrypted.ciphertext.len()));
 
+                // TEE Enclave
                 let mut tee = self.tee_engine.lock().await;
                 match tee.create_enclave("intel_sgx") {
                     Ok(enclave) => {
@@ -969,6 +980,7 @@ impl NEXUSApp {
                     Err(e) => result.push_str(&format!("❌ TEE Error: {}\n", e)),
                 }
 
+                // Yield Scan
                 let mut oracle = self.oracle.lock().await;
                 let opportunities = oracle.scan_all_chains();
                 result.push_str(&format!("🧠 Oracle scanned {} opportunities\n", opportunities.len()));
@@ -977,8 +989,9 @@ impl NEXUSApp {
                     result.push_str(&format!("   {}. {}:{} - APY {:.1}% | Risk {:.2}\n",
                         i + 1, opp.chain, opp.protocol, opp.apy, opp.risk_score));
                 }
-                result.push('\n');
+                result.push_str("\n");
 
+                // Bridge
                 let mut bridge = self.bridge.lock().await;
                 match bridge.initiate_bridge("ethereum", "solana", "USDC", 100_000.0) {
                     Ok(b) => {
@@ -989,12 +1002,14 @@ impl NEXUSApp {
                     Err(e) => result.push_str(&format!("❌ Bridge Error: {}\n", e)),
                 }
 
+                // Audit
                 let mut auditor = self.auditor.lock().await;
                 let report = auditor.audit_vault(&vault);
                 result.push_str(&format!("📋 Compliance Score: {:.1}/100\n", report.score));
                 result.push_str(&format!("   Framework: {}\n", report.framework));
                 result.push_str(&format!("   Issues: {}\n\n", report.issues.len()));
 
+                // Marketplace
                 let mut marketplace = self.marketplace.lock().await;
                 let agent = marketplace.register_agent("YieldScout", "yield_optimization");
                 result.push_str(&format!("🤖 Agent registered: {}\n", agent.name));
